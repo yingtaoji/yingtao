@@ -239,7 +239,7 @@ body.page5-active { background: #ffffff; }
 #page4 .page4-wrap { position: relative; z-index: 1; max-width: 560px; margin: 0 auto; padding-top: 70px; }
 .card-deck { position: relative; width: 100%; height: 490px; perspective: 1400px; margin-bottom: 30px; user-select: none; -webkit-user-select: none; touch-action: pan-y; cursor: grab; }
 .card-deck:active { cursor: grabbing; }
-.deck-card { position: absolute; top: 0; left: 0; width: 100%; height: 420px; border-radius: 24px; transform-style: preserve-3d; transition: transform 0.05s linear, opacity 0.4s ease; will-change: transform; cursor: pointer; }
+.deck-card { position: absolute; top: 0; left: 0; width: 100%; height: 420px; border-radius: 24px; transform-style: preserve-3d; -webkit-transform-style: preserve-3d; transition: transform 0.05s linear, opacity 0.4s ease; will-change: transform; cursor: pointer; touch-action: pan-y; }
 .deck-card.settling { transition: transform 0.55s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.4s ease; }
 .deck-card .card-face { position: absolute; inset: 0; border-radius: 24px; backface-visibility: hidden; -webkit-backface-visibility: hidden; overflow: hidden; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 32px 28px; border: 1px solid rgba(255, 255, 255, 0.75); box-shadow: 0 14px 44px rgba(90, 110, 135, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.95); }
 .deck-card .card-front::before { content: ""; position: absolute; inset: 0; background: linear-gradient(135deg, rgba(255,255,255,0.75) 0%, rgba(255,255,255,0) 55%); pointer-events: none; border-radius: inherit; z-index: 1; }
@@ -1519,14 +1519,18 @@ document.addEventListener('DOMContentLoaded', function () {
         }, 250);
     });
 
+    /* ================= 第四页卡片（手机端翻转修复版） ================= */
     const cardDeck = document.querySelector('.js-card-deck');
     const deckDots = document.querySelectorAll('.js-deck-dots .deck-dot');
     let currentOrder = [0, 1, 2, 3];
     let isAnimating = false;
     let dragging = false;
     let startX = 0, startY = 0, dragX = 0;
-    let hasMoved = false;
-    const SWIPE_THRESHOLD = 80;
+    let isVerticalScroll = false;   // 本次手势判定为纵向滚动
+    let lastTouchTs = 0;            // 用于屏蔽触摸后浏览器补发的鼠标事件
+    const SWIPE_THRESHOLD = 80;     // 超过此位移 = 滑动切卡
+    const TAP_THRESHOLD   = 12;     // 小于此位移 = 点击（手指抖动容差）
+    const DIRECTION_LOCK  = 6;      // 方向判定所需的最小位移
 
     function getPosTransform(position, extraX) {
         const y = position * 20;
@@ -1585,58 +1589,72 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     enableTransition();
     render(0);
-    // 手机端手指抖动阈值：12px 以内都算「点击」
-    const MOVE_THRESHOLD = 12;
 
     function onDown(e) {
+        // 触摸后浏览器补发的鼠标事件直接忽略，避免翻转被“翻回去”
+        if (e.type === 'mousedown' && Date.now() - lastTouchTs < 800) return;
         if (isAnimating) return;
-        const target = e.target;
-        if (target && target.closest && target.closest('.back-share')) return;
+        if (e.target && e.target.closest && e.target.closest('.back-share')) return;
+
         const point = e.touches ? e.touches[0] : e;
         startX = point.clientX;
         startY = point.clientY;
         dragX = 0;
         dragging = true;
-        hasMoved = false;
+        isVerticalScroll = false;
         disableTransition();
     }
 
     function onMove(e) {
         if (!dragging) return;
+
         const point = e.touches ? e.touches[0] : e;
         const dx = point.clientX - startX;
         const dy = point.clientY - startY;
-        // 阈值提高到 12px，手机端轻微抖动不算拖动
-        if (!hasMoved && Math.abs(dx) < MOVE_THRESHOLD && Math.abs(dy) < MOVE_THRESHOLD) return;
-        // 纵向滑动视为页面滚动，放弃卡片拖动
-        if (Math.abs(dy) > Math.abs(dx) * 1.5) {
-            dragging = false;
-            enableTransition();
-            render(0);
+
+        // 位移太小，先不判定方向
+        if (!isVerticalScroll && Math.abs(dx) < DIRECTION_LOCK && Math.abs(dy) < DIRECTION_LOCK) return;
+
+        // 纵向为主 → 交给页面滚动，本次手势不再翻卡
+        if (Math.abs(dy) > Math.abs(dx)) {
+            if (!isVerticalScroll) {
+                isVerticalScroll = true;
+                dragX = 0;
+                render(0);
+            }
             return;
         }
-        hasMoved = true;
+
+        if (isVerticalScroll) return;
+
         dragX = dx;
-        // 阻止页面跟随滚动
-        if (e.cancelable) e.preventDefault();
         render(dragX);
     }
 
     function onUp(e) {
+        if (e.type === 'mouseup' && Date.now() - lastTouchTs < 800) return;
         if (!dragging) return;
         dragging = false;
-        const dx = dragX;
-        // touchend 兜底取 target（部分安卓浏览器 e.target 为空）
-        let target = e.target;
-        if (!target && e.changedTouches && e.changedTouches[0]) {
-            target = e.changedTouches[0].target;
-        }
-        if (target && target.closest && target.closest('.back-share')) return;
 
+        const dx = dragX;
+        dragX = 0;
+
+        // 纵向滚动，不做任何卡片操作
+        if (isVerticalScroll) {
+            isVerticalScroll = false;
+            enableTransition();
+            render(0);
+            return;
+        }
+
+        // 滑动切卡
         if (Math.abs(dx) > SWIPE_THRESHOLD) {
             if (dx < 0) { goNext(); } else { goPrev(); }
-        } else if (!hasMoved) {
-            // 没移动 → 视为点击 → 翻转
+            return;
+        }
+
+        // 关键修复：只要位移在容差内就视为点击，不再依赖 hasMoved
+        if (Math.abs(dx) <= TAP_THRESHOLD) {
             const topIndex = currentOrder[0];
             const topCard = cardDeck.querySelector(`.deck-card[data-index="${topIndex}"]`);
             if (topCard) {
@@ -1644,22 +1662,44 @@ document.addEventListener('DOMContentLoaded', function () {
                 enableTransition();
                 render(0);
             }
-        } else {
-            enableTransition();
-            render(0);
+            return;
         }
+
+        // 中间位移（既不是点击也不是滑动）→ 回弹归位
+        enableTransition();
+        render(0);
+    }
+
+    function onCancel() {
+        if (!dragging) return;
+        dragging = false;
         dragX = 0;
+        isVerticalScroll = false;
+        enableTransition();
+        render(0);
     }
 
     if (cardDeck) {
         cardDeck.addEventListener('mousedown', onDown);
         cardDeck.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
-        cardDeck.addEventListener('touchstart', onDown, { passive: true });
-        cardDeck.addEventListener('touchmove', onMove, { passive: false }); // ← 改成 false，能 preventDefault
-        cardDeck.addEventListener('touchend', onUp);
-        cardDeck.addEventListener('touchcancel', onUp);
+
+        cardDeck.addEventListener('touchstart', function (e) {
+            lastTouchTs = Date.now();
+            onDown(e);
+        }, { passive: true });
+
+        cardDeck.addEventListener('touchmove', onMove, { passive: true });
+
+        cardDeck.addEventListener('touchend', function (e) {
+            lastTouchTs = Date.now();
+            onUp(e);
+        });
+
+        // 滚动被浏览器接管时会触发 touchcancel，这里只复位不翻面
+        cardDeck.addEventListener('touchcancel', onCancel);
     }
+
     function resetCardDeck() {
         if (!cardDeck) return;
         clearFlip();
@@ -1667,6 +1707,7 @@ document.addEventListener('DOMContentLoaded', function () {
         isAnimating = false;
         dragging = false;
         dragX = 0;
+        isVerticalScroll = false;
         enableTransition();
         render(0);
     }
