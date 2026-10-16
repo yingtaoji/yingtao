@@ -1585,35 +1585,58 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     enableTransition();
     render(0);
+    // 手机端手指抖动阈值：12px 以内都算「点击」
+    const MOVE_THRESHOLD = 12;
+
     function onDown(e) {
         if (isAnimating) return;
-        if (e.target.closest('.back-share')) return;
+        const target = e.target;
+        if (target && target.closest && target.closest('.back-share')) return;
         const point = e.touches ? e.touches[0] : e;
-        startX = point.clientX; startY = point.clientY;
+        startX = point.clientX;
+        startY = point.clientY;
         dragX = 0;
         dragging = true;
         hasMoved = false;
         disableTransition();
     }
+
     function onMove(e) {
         if (!dragging) return;
         const point = e.touches ? e.touches[0] : e;
         const dx = point.clientX - startX;
         const dy = point.clientY - startY;
-        if (!hasMoved && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
-        if (Math.abs(dy) > Math.abs(dx) * 1.5) return;
+        // 阈值提高到 12px，手机端轻微抖动不算拖动
+        if (!hasMoved && Math.abs(dx) < MOVE_THRESHOLD && Math.abs(dy) < MOVE_THRESHOLD) return;
+        // 纵向滑动视为页面滚动，放弃卡片拖动
+        if (Math.abs(dy) > Math.abs(dx) * 1.5) {
+            dragging = false;
+            enableTransition();
+            render(0);
+            return;
+        }
         hasMoved = true;
         dragX = dx;
+        // 阻止页面跟随滚动
+        if (e.cancelable) e.preventDefault();
         render(dragX);
     }
+
     function onUp(e) {
         if (!dragging) return;
         dragging = false;
         const dx = dragX;
-        if (e.target && e.target.closest && e.target.closest('.back-share')) return;
+        // touchend 兜底取 target（部分安卓浏览器 e.target 为空）
+        let target = e.target;
+        if (!target && e.changedTouches && e.changedTouches[0]) {
+            target = e.changedTouches[0].target;
+        }
+        if (target && target.closest && target.closest('.back-share')) return;
+
         if (Math.abs(dx) > SWIPE_THRESHOLD) {
             if (dx < 0) { goNext(); } else { goPrev(); }
         } else if (!hasMoved) {
+            // 没移动 → 视为点击 → 翻转
             const topIndex = currentOrder[0];
             const topCard = cardDeck.querySelector(`.deck-card[data-index="${topIndex}"]`);
             if (topCard) {
@@ -1627,12 +1650,13 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         dragX = 0;
     }
+
     if (cardDeck) {
         cardDeck.addEventListener('mousedown', onDown);
         cardDeck.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
         cardDeck.addEventListener('touchstart', onDown, { passive: true });
-        cardDeck.addEventListener('touchmove', onMove, { passive: true });
+        cardDeck.addEventListener('touchmove', onMove, { passive: false }); // ← 改成 false，能 preventDefault
         cardDeck.addEventListener('touchend', onUp);
         cardDeck.addEventListener('touchcancel', onUp);
     }
